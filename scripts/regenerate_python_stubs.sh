@@ -31,7 +31,7 @@ stubgen \
 
 # We need this while `duckdb` is a single file module and not a package.
 # If `duckdb` becomes a proper package, this can be removed.
-mv "${OUTPUT_DIR}/duckdb.pyi" "${OUTPUT_DIR}/__init__.pyi"
+mv "${OUTPUT_DIR}/duckdb/duckdb.pyi" "${OUTPUT_DIR}/duckdb/__init__.pyi"
 
 add_header() (
 	{ set +x; } 2>/dev/null
