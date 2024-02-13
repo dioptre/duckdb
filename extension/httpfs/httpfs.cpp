@@ -3,6 +3,7 @@
 #include "duckdb/common/atomic.hpp"
 #include "duckdb/common/file_opener.hpp"
 #include "duckdb/common/http_state.hpp"
+#include "duckdb/common/exception/http_exception.hpp"
 #include "duckdb/common/thread.hpp"
 #include "duckdb/common/types/hash.hpp"
 #include "duckdb/function/scalar/strftime_format.hpp"
@@ -34,6 +35,8 @@ HTTPParams HTTPParams::ReadFrom(FileOpener *opener) {
 	uint64_t retry_wait_ms = DEFAULT_RETRY_WAIT_MS;
 	float retry_backoff = DEFAULT_RETRY_BACKOFF;
 	bool force_download = DEFAULT_FORCE_DOWNLOAD;
+	bool keep_alive = DEFAULT_KEEP_ALIVE;
+
 	Value value;
 	if (FileOpener::TryGetCurrentSetting(opener, "http_timeout", value)) {
 		timeout = value.GetValue<uint64_t>();
@@ -50,8 +53,11 @@ HTTPParams HTTPParams::ReadFrom(FileOpener *opener) {
 	if (FileOpener::TryGetCurrentSetting(opener, "http_retry_backoff", value)) {
 		retry_backoff = value.GetValue<float>();
 	}
+	if (FileOpener::TryGetCurrentSetting(opener, "http_keep_alive", value)) {
+		keep_alive = value.GetValue<bool>();
+	}
 
-	return {timeout, retries, retry_wait_ms, retry_backoff, force_download};
+	return {timeout, retries, retry_wait_ms, retry_backoff, force_download, keep_alive};
 }
 
 void HTTPFileSystem::ParseUrl(string &url, string &path_out, string &proto_host_port_out) {
@@ -181,7 +187,7 @@ unique_ptr<duckdb_httplib_openssl::Client> HTTPFileSystem::GetClient(const HTTPP
                                                                      const char *proto_host_port) {
 	auto client = make_uniq<duckdb_httplib_openssl::Client>(proto_host_port);
 	client->set_follow_location(true);
-	client->set_keep_alive(true);
+	client->set_keep_alive(http_params.keep_alive);
 	client->enable_server_certificate_verification(false);
 	client->set_write_timeout(http_params.timeout);
 	client->set_read_timeout(http_params.timeout);
@@ -638,8 +644,14 @@ void HTTPFileHandle::Initialize(FileOpener *opener) {
 				                    full_download_result->http_url, to_string(full_download_result->code),
 				                    full_download_result->error);
 			}
-			// Mark the file as initialized, unlocking it and allowing parallel reads
-			cached_file_handle->SetInitialized();
+
+			// Mark the file as initialized, set its final length, and unlock it to allowing parallel reads
+			cached_file_handle->SetInitialized(length);
+
+			// We shouldn't write these to cache
+			should_write_cache = false;
+		} else {
+			length = cached_file_handle->GetSize();
 		}
 	}
 
