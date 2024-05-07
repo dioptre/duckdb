@@ -14,6 +14,7 @@
 #include "duckdb/storage/table_io_manager.hpp"
 #include "duckdb/storage/write_ahead_log.hpp"
 #include "duckdb/storage/database_size.hpp"
+#include "duckdb/common/enums/checkpoint_type.hpp"
 
 namespace duckdb {
 class BlockManager;
@@ -34,6 +35,17 @@ public:
 	virtual void FlushCommit() = 0;
 };
 
+struct CheckpointOptions {
+	CheckpointOptions()
+	    : wal_action(CheckpointWALAction::DONT_DELETE_WAL), action(CheckpointAction::CHECKPOINT_IF_REQUIRED),
+	      type(CheckpointType::FULL_CHECKPOINT) {
+	}
+
+	CheckpointWALAction wal_action;
+	CheckpointAction action;
+	CheckpointType type;
+};
+
 //! StorageManager is responsible for managing the physical storage of the
 //! database on disk
 class StorageManager {
@@ -46,7 +58,7 @@ public:
 	static StorageManager &Get(Catalog &catalog);
 
 	//! Initialize a database or load an existing database from the given path
-	void Initialize();
+	void Initialize(optional_ptr<ClientContext> context);
 
 	DatabaseInstance &GetDatabase();
 	AttachedDatabase &GetAttached() {
@@ -67,13 +79,13 @@ public:
 	virtual bool AutomaticCheckpoint(idx_t estimated_wal_bytes) = 0;
 	virtual unique_ptr<StorageCommitState> GenStorageCommitState(Transaction &transaction, bool checkpoint) = 0;
 	virtual bool IsCheckpointClean(MetaBlockPointer checkpoint_id) = 0;
-	virtual void CreateCheckpoint(bool delete_wal = false, bool force_checkpoint = false) = 0;
+	virtual void CreateCheckpoint(CheckpointOptions options = CheckpointOptions()) = 0;
 	virtual DatabaseSize GetDatabaseSize() = 0;
 	virtual vector<MetadataBlockInfo> GetMetadataInfo() = 0;
 	virtual shared_ptr<TableIOManager> GetTableIOManager(BoundCreateTableInfo *info) = 0;
 
 protected:
-	virtual void LoadDatabase() = 0;
+	virtual void LoadDatabase(optional_ptr<ClientContext> context = nullptr) = 0;
 
 protected:
 	//! The database this storage manager belongs to
@@ -91,12 +103,12 @@ protected:
 public:
 	template <class TARGET>
 	TARGET &Cast() {
-		D_ASSERT(dynamic_cast<TARGET *>(this));
+		DynamicCastCheck<TARGET>(this);
 		return reinterpret_cast<TARGET &>(*this);
 	}
 	template <class TARGET>
 	const TARGET &Cast() const {
-		D_ASSERT(dynamic_cast<const TARGET *>(this));
+		DynamicCastCheck<TARGET>(this);
 		return reinterpret_cast<const TARGET &>(*this);
 	}
 };
@@ -115,12 +127,12 @@ public:
 	bool AutomaticCheckpoint(idx_t estimated_wal_bytes) override;
 	unique_ptr<StorageCommitState> GenStorageCommitState(Transaction &transaction, bool checkpoint) override;
 	bool IsCheckpointClean(MetaBlockPointer checkpoint_id) override;
-	void CreateCheckpoint(bool delete_wal, bool force_checkpoint) override;
+	void CreateCheckpoint(CheckpointOptions options) override;
 	DatabaseSize GetDatabaseSize() override;
 	vector<MetadataBlockInfo> GetMetadataInfo() override;
 	shared_ptr<TableIOManager> GetTableIOManager(BoundCreateTableInfo *info) override;
 
 protected:
-	void LoadDatabase() override;
+	void LoadDatabase(optional_ptr<ClientContext> context = nullptr) override;
 };
 } // namespace duckdb

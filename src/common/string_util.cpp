@@ -44,13 +44,13 @@ void StringUtil::LTrim(string &str) {
 
 // Remove trailing ' ', '\f', '\n', '\r', '\t', '\v'
 void StringUtil::RTrim(string &str) {
-	str.erase(find_if(str.rbegin(), str.rend(), [](int ch) { return ch > 0 && !CharacterIsSpace(ch); }).base(),
+	str.erase(find_if(str.rbegin(), str.rend(), [](char ch) { return ch > 0 && !CharacterIsSpace(ch); }).base(),
 	          str.end());
 }
 
 void StringUtil::RTrim(string &str, const string &chars_to_trim) {
 	str.erase(find_if(str.rbegin(), str.rend(),
-	                  [&chars_to_trim](int ch) { return ch > 0 && chars_to_trim.find(ch) == string::npos; })
+	                  [&chars_to_trim](char ch) { return ch > 0 && chars_to_trim.find(ch) == string::npos; })
 	              .base(),
 	          str.end());
 }
@@ -173,7 +173,6 @@ string StringUtil::Join(const set<string> &input, const string &separator) {
 
 string StringUtil::BytesToHumanReadableString(idx_t bytes, idx_t multiplier) {
 	D_ASSERT(multiplier == 1000 || multiplier == 1024);
-	string db_size;
 	idx_t array[6] = {};
 	const char *unit[2][6] = {{"bytes", "KiB", "MiB", "GiB", "TiB", "PiB"}, {"bytes", "kB", "MB", "GB", "TB", "PB"}};
 
@@ -204,7 +203,8 @@ string StringUtil::Upper(const string &str) {
 
 string StringUtil::Lower(const string &str) {
 	string copy(str);
-	transform(copy.begin(), copy.end(), copy.begin(), [](unsigned char c) { return StringUtil::CharacterToLower(c); });
+	transform(copy.begin(), copy.end(), copy.begin(),
+	          [](unsigned char c) { return StringUtil::CharacterToLower(static_cast<char>(c)); });
 	return (copy);
 }
 
@@ -216,7 +216,7 @@ bool StringUtil::IsLower(const string &str) {
 uint64_t StringUtil::CIHash(const string &str) {
 	uint32_t hash = 0;
 	for (auto c : str) {
-		hash += StringUtil::CharacterToLower(c);
+		hash += static_cast<uint32_t>(StringUtil::CharacterToLower(static_cast<char>(c)));
 		hash += hash << 10;
 		hash ^= hash >> 6;
 	}
@@ -230,7 +230,7 @@ bool StringUtil::CIEquals(const string &l1, const string &l2) {
 	if (l1.size() != l2.size()) {
 		return false;
 	}
-	const auto charmap = LowerFun::ascii_to_lower_map;
+	const auto charmap = LowerFun::ASCII_TO_LOWER_MAP;
 	for (idx_t c = 0; c < l1.size(); c++) {
 		if (charmap[(uint8_t)l1[c]] != charmap[(uint8_t)l2[c]]) {
 			return false;
@@ -240,7 +240,7 @@ bool StringUtil::CIEquals(const string &l1, const string &l2) {
 }
 
 bool StringUtil::CILessThan(const string &s1, const string &s2) {
-	const auto charmap = UpperFun::ascii_to_upper_map;
+	const auto charmap = UpperFun::ASCII_TO_UPPER_MAP;
 
 	unsigned char u1, u2;
 
@@ -254,6 +254,16 @@ bool StringUtil::CILessThan(const string &s1, const string &s2) {
 		}
 	}
 	return (charmap[u1] - charmap[u2]) < 0;
+}
+
+idx_t StringUtil::CIFind(vector<string> &vector, const string &search_string) {
+	for (idx_t i = 0; i < vector.size(); i++) {
+		const auto &string = vector[i];
+		if (CIEquals(string, search_string)) {
+			return i;
+		}
+	}
+	return DConstants::INVALID_INDEX;
 }
 
 vector<string> StringUtil::Split(const string &input, const string &split) {
@@ -355,7 +365,7 @@ idx_t StringUtil::LevenshteinDistance(const string &s1_p, const string &s2_p, id
 			// d[i][j] = std::min({ d[i - 1][j] + 1,
 			//                      d[i][j - 1] + 1,
 			//                      d[i - 1][j - 1] + (s1[i - 1] == s2[j - 1] ? 0 : 1) });
-			int equal = s1[i - 1] == s2[j - 1] ? 0 : not_equal_penalty;
+			auto equal = s1[i - 1] == s2[j - 1] ? 0 : not_equal_penalty;
 			idx_t adjacent_score1 = array.Score(i - 1, j) + 1;
 			idx_t adjacent_score2 = array.Score(i, j - 1) + 1;
 			idx_t adjacent_score3 = array.Score(i - 1, j - 1) + equal;

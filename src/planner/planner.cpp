@@ -12,6 +12,8 @@
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_parameter_expression.hpp"
 #include "duckdb/transaction/meta_transaction.hpp"
+#include "duckdb/execution/column_binding_resolver.hpp"
+#include "duckdb/main/attached_database.hpp"
 
 namespace duckdb {
 
@@ -75,7 +77,7 @@ void Planner::CreatePlan(SQLStatement &statement) {
 			throw;
 		}
 	}
-	this->properties = binder->properties;
+	this->properties = binder->GetStatementProperties();
 	this->properties.parameter_count = parameter_count;
 	properties.bound_all_parameters = !bound_parameters.rebind && parameters_resolved;
 
@@ -100,7 +102,7 @@ shared_ptr<PreparedStatementData> Planner::PrepareSQLStatement(unique_ptr<SQLSta
 	// create a plan of the underlying statement
 	CreatePlan(std::move(statement));
 	// now create the logical prepare
-	auto prepared_data = make_shared<PreparedStatementData>(copied_statement->type);
+	auto prepared_data = make_shared_ptr<PreparedStatementData>(copied_statement->type);
 	prepared_data->unbound_statement = std::move(copied_statement);
 	prepared_data->names = names;
 	prepared_data->types = types;
@@ -166,6 +168,8 @@ void Planner::VerifyPlan(ClientContext &context, unique_ptr<LogicalOperator> &op
 	if (!OperatorSupportsSerialization(*op)) {
 		return;
 	}
+	// verify the column bindings of the plan
+	ColumnBindingResolver::Verify(*op);
 
 	// format (de)serialization of this operator
 	try {
@@ -179,10 +183,16 @@ void Planner::VerifyPlan(ClientContext &context, unique_ptr<LogicalOperator> &op
 			*map = std::move(parameters);
 		}
 		op = std::move(new_plan);
-	} catch (SerializationException &ex) {
-		// pass
-	} catch (NotImplementedException &ex) {
-		// pass
+	} catch (std::exception &ex) {
+		ErrorData error(ex);
+		switch (error.Type()) {
+		case ExceptionType::SERIALIZATION:   // NOLINT: explicitly allowing these errors (for now)
+			break;                           // pass
+		case ExceptionType::NOT_IMPLEMENTED: // NOLINT: explicitly allowing these errors (for now)
+			break;                           // pass
+		default:
+			throw;
+		}
 	}
 }
 

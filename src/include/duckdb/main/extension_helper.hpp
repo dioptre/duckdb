@@ -8,12 +8,15 @@
 
 #pragma once
 
-#include <string>
 #include "duckdb.hpp"
 #include "duckdb/main/extension_entries.hpp"
 
+#include <string>
+
 namespace duckdb {
+
 class DuckDB;
+class HTTPLogger;
 
 enum class ExtensionLoadResult : uint8_t { LOADED_EXTENSION = 0, EXTENSION_UNKNOWN = 1, NOT_LOADED = 2 };
 
@@ -31,6 +34,7 @@ struct ExtensionAlias {
 struct ExtensionInitResult {
 	string filename;
 	string filebase;
+	string extension_version;
 
 	void *lib_hdl;
 };
@@ -87,6 +91,22 @@ public:
 	static string GetExtensionName(const string &extension);
 	static bool IsFullPath(const string &extension);
 
+	//! Lookup a name + type in an ExtensionFunctionEntry list
+	template <size_t N>
+	static vector<pair<string, CatalogType>>
+	FindExtensionInFunctionEntries(const string &name, const ExtensionFunctionEntry (&entries)[N]) {
+		auto lcase = StringUtil::Lower(name);
+
+		vector<pair<string, CatalogType>> result;
+		for (idx_t i = 0; i < N; i++) {
+			auto &element = entries[i];
+			if (element.name == lcase) {
+				result.push_back(make_pair(element.extension, element.type));
+			}
+		}
+		return result;
+	}
+
 	//! Lookup a name in an ExtensionEntry list
 	template <idx_t N>
 	static string FindExtensionInEntries(const string &name, const ExtensionEntry (&entries)[N]) {
@@ -124,13 +144,16 @@ public:
 	                                            const string &extension_name);
 	static string AddExtensionInstallHintToErrorMsg(ClientContext &context, const string &base_error,
 	                                                const string &extension_name);
+	static string AddExtensionInstallHintToErrorMsg(DBConfig &config, const string &base_error,
+	                                                const string &extension_name);
 
 	//! For tagged releases we use the tag, else we use the git commit hash
 	static const string GetVersionDirectoryName();
 
 private:
 	static void InstallExtensionInternal(DBConfig &config, FileSystem &fs, const string &local_path,
-	                                     const string &extension, bool force_install, const string &repository);
+	                                     const string &extension, bool force_install, const string &repository,
+	                                     optional_ptr<HTTPLogger> http_logger = nullptr);
 	static const vector<string> PathComponents();
 	static string DefaultExtensionFolder(FileSystem &fs);
 	static bool AllowAutoInstall(const string &extension);
