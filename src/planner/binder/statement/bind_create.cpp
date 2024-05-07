@@ -42,6 +42,7 @@
 #include "duckdb/catalog/duck_catalog.hpp"
 #include "duckdb/function/table/table_scan.hpp"
 #include "duckdb/parser/tableref/basetableref.hpp"
+#include "duckdb/planner/expression_binder/select_bind_state.hpp"
 
 namespace duckdb {
 
@@ -54,12 +55,18 @@ void Binder::BindSchemaOrCatalog(ClientContext &context, string &catalog, string
 		if (database) {
 			// we have a database with this name
 			// check if there is a schema
-			auto schema_obj = Catalog::GetSchema(context, INVALID_CATALOG, schema, OnEntryNotFound::RETURN_NULL);
-			if (schema_obj) {
-				auto &attached = schema_obj->catalog.GetAttached();
-				throw BinderException(
-				    "Ambiguous reference to catalog or schema \"%s\" - use a fully qualified path like \"%s.%s\"",
-				    schema, attached.GetName(), schema);
+			auto &search_path = *context.client_data->catalog_search_path;
+			auto catalog_names = search_path.GetCatalogsForSchema(schema);
+			if (catalog_names.empty()) {
+				catalog_names.push_back(DatabaseManager::GetDefaultDatabase(context));
+			}
+			for (auto &catalog_name : catalog_names) {
+				auto &catalog = Catalog::GetCatalog(context, catalog_name);
+				if (catalog.CheckAmbiguousCatalogOrSchema(context, schema)) {
+					throw BinderException(
+					    "Ambiguous reference to catalog or schema \"%s\" - use a fully qualified path like \"%s.%s\"",
+					    schema, catalog_name, schema);
+				}
 			}
 			catalog = schema;
 			schema = string();
@@ -114,6 +121,7 @@ SchemaCatalogEntry &Binder::BindSchema(CreateInfo &info) {
 	D_ASSERT(schema_obj.type == CatalogType::SCHEMA_ENTRY);
 	info.schema = schema_obj.name;
 	if (!info.temporary) {
+		auto &properties = GetStatementProperties();
 		properties.modified_databases.insert(schema_obj.catalog.GetName());
 	}
 	return schema_obj;
@@ -178,11 +186,10 @@ SchemaCatalogEntry &Binder::BindCreateFunctionInfo(CreateInfo &info) {
 
 	// bind it to verify the function was defined correctly
 	ErrorData error;
-	auto sel_node = make_uniq<BoundSelectNode>();
-	auto group_info = make_uniq<BoundGroupInformation>();
-	SelectBinder binder(*this, context, *sel_node, *group_info);
+	BoundSelectNode sel_node;
+	BoundGroupInformation group_info;
+	SelectBinder binder(*this, context, sel_node, group_info);
 	error = binder.Bind(expression, 0, false);
-
 	if (error.HasError()) {
 		error.Throw();
 	}
@@ -266,16 +273,16 @@ static void FindMatchingPrimaryKeyColumns(const ColumnList &columns, const vecto
 			continue;
 		}
 		auto &unique = constr->Cast<UniqueConstraint>();
-		if (find_primary_key && !unique.is_primary_key) {
+		if (find_primary_key && !unique.IsPrimaryKey()) {
 			continue;
 		}
 		found_constraint = true;
 
 		vector<string> pk_names;
-		if (unique.index.index != DConstants::INVALID_INDEX) {
-			pk_names.push_back(columns.GetColumn(LogicalIndex(unique.index)).Name());
+		if (unique.HasIndex()) {
+			pk_names.push_back(columns.GetColumn(LogicalIndex(unique.GetIndex())).Name());
 		} else {
-			pk_names = unique.columns;
+			pk_names = unique.GetColumnNames();
 		}
 		if (find_primary_key) {
 			// found matching primary key
@@ -408,15 +415,14 @@ static bool AnyConstraintReferencesGeneratedColumn(CreateTableInfo &table_info) 
 		}
 		case ConstraintType::UNIQUE: {
 			auto &constraint = constr->Cast<UniqueConstraint>();
-			auto index = constraint.index;
-			if (index.index == DConstants::INVALID_INDEX) {
-				for (auto &col : constraint.columns) {
+			if (!constraint.HasIndex()) {
+				for (auto &col : constraint.GetColumnNames()) {
 					if (generated_columns.count(col)) {
 						return true;
 					}
 				}
 			} else {
-				if (table_info.columns.GetColumn(index).Generated()) {
+				if (table_info.columns.GetColumn(constraint.GetIndex()).Generated()) {
 					return true;
 				}
 			}
@@ -474,6 +480,7 @@ BoundStatement Binder::Bind(CreateStatement &stmt) {
 	result.types = {LogicalType::BIGINT};
 
 	auto catalog_type = stmt.info->type;
+	auto &properties = GetStatementProperties();
 	switch (catalog_type) {
 	case CatalogType::SCHEMA_ENTRY: {
 		auto &base = stmt.info->Cast<CreateInfo>();
@@ -568,9 +575,8 @@ BoundStatement Binder::Bind(CreateStatement &stmt) {
 				FindForeignKeyIndexes(pk_table_entry_ptr.GetColumns(), fk.pk_columns, fk.info.pk_keys);
 				CheckForeignKeyTypes(pk_table_entry_ptr.GetColumns(), create_info.columns, fk);
 				auto &storage = pk_table_entry_ptr.GetStorage();
-				auto index = storage.info->indexes.FindForeignKeyIndex(fk.info.pk_keys,
-				                                                       ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE);
-				if (!index) {
+
+				if (!storage.HasForeignKeyIndex(fk.info.pk_keys, ForeignKeyType::FK_TYPE_PRIMARY_KEY_TABLE)) {
 					auto fk_column_names = StringUtil::Join(fk.pk_columns, ",");
 					throw BinderException("Failed to create foreign key on %s(%s): no UNIQUE or PRIMARY KEY constraint "
 					                      "present on these columns",
