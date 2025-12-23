@@ -725,6 +725,12 @@ SinkCombineResultType PhysicalInsert::Combine(ExecutionContext &context, Operato
 
 SinkFinalizeType PhysicalInsert::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
                                           OperatorSinkFinalizeInput &input) const {
+	// MEMORY LEAK FIX: Clear return_collection if user didn't request RETURNING clause
+	// This prevents accumulation of INSERT query results in memory
+	if (!return_chunk) {
+		auto &gstate = input.global_state.Cast<InsertGlobalState>();
+		gstate.return_collection.Reset();
+	}
 	return SinkFinalizeType::READY;
 }
 
